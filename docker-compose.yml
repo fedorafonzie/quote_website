@@ -1,0 +1,37 @@
+version: "3.9"
+services:
+  db:
+    image: postgres:13-alpine # Gebruik 13-alpine voor kleinere image op Pi
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_USER: django_user
+      POSTGRES_PASSWORD: supersecurepassword # VERANDER DIT NAAR EEN ECHT STERK WACHTWOORD!
+      POSTGRES_DB: quotedb
+    ports:
+      - "5432:5432" # Optioneel: Poort naar buiten exposen (handig voor DB-tools)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s # Geef de DB wat meer tijd om te starten
+
+  web:
+    build: ./django_app # Verwijst naar de map met je Django-applicatie
+    # commando zal later worden aangepast zodra Django is geïnitialiseerd
+    command: "true" # Een tijdelijk commando om de container te laten draaien
+    volumes:
+      - ./django_app:/code
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres://django_user:supersecurepassword@db:5432/quotedb
+    depends_on:
+      db:
+        condition: service_healthy
+    # Specifieke architectuur voor Raspberry Pi containers
+    platform: linux/arm64/v8 # Voor Pi 3, 4, 5 met 64-bit OS. Indien 32-bit (oudere Pi/OS), gebruik linux/arm/v7
+
+volumes:
+  postgres_data:
