@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Environments
+.env # Heel belangrijk: negeert je .env bestand met gevoelige info
+venv/
+env/
+.direnv/
+
+# Database
+db.sqlite3
+*.sqlite3
+
+# Media and uploaded files (if you have them)
+/media/
+
+# Node.js modules
+node_modules/
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Docker
+docker-compose.override.yml # Optioneel: als je lokale overrides hebt
+*.env # Dubbele check voor .env, voor de zekerheid
