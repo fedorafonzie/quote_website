@@ -41,7 +41,7 @@ class Tag(models.Model):
 
 class Quote(models.Model):
     text = models.TextField(verbose_name="Tekst van de quote")
-    author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name='quotes', verbose_name="Auteur")
+    author = models.ForeignKey(Author, on_delete=models.SET_NULL, related_name='quotes', verbose_name="Auteur", null=True, blank=True)
     source = models.CharField(max_length=255, blank=True, null=True, verbose_name="Bron")
     year = models.IntegerField(blank=True, null=True, verbose_name="Jaar")
     url = models.URLField(max_length=2000, blank=True, null=True, verbose_name="URL Bron") # Aangepast max_length voor lange URLs
@@ -57,5 +57,11 @@ class Quote(models.Model):
         ordering = ['-added_date'] # Sorteer quotes op meest recent toegevoegd
 
     def __str__(self):
+        # Gebruik de auteursnaam indien beschikbaar, anders een placeholder
+        author_display = self.author.name if self.author else "Onbekende Auteur"
+
         # Verkorte weergave van de quote voor de admin-interface
-        return f'"{self.text[:50]}..." by {self.author.name}' if len(self.text) > 50 else f'"{self.text}" by {self.author.name}'
+        if len(self.text) > 50:
+            return f'"{self.text[:50]}..." by {author_display}'
+        else:
+            return f'"{self.text}" by {author_display}'
