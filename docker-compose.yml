@@ -1,5 +1,3 @@
-
-
 services:
   db:
     image: postgres:15-alpine
@@ -11,6 +9,13 @@ services:
       POSTGRES_PASSWORD: mypassword # Pas dit aan!
     ports:
       - "5432:5432"
+    # --- TOEGEVOEGD BLOK ---
+    # Deze healthcheck controleert of de database klaar is om verbindingen te accepteren.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d myquoteproject_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   web:
     build:
@@ -24,12 +29,15 @@ services:
     environment:
       DB_NAME: myquoteproject_db
       DB_USER: myuser
-      DB_PASSWORD: mypassword # Pas dit aan!
+      DB_PASSWORD: mypassword 
       DB_HOST: db
       DB_PORT: 5432
       DJANGO_SETTINGS_MODULE: core.settings # Hier 'core' als je projectnaam
+    # --- AANGEPAST BLOK ---
+    # We voegen de 'condition' toe zodat 'web' wacht tot 'db' "healthy" is.
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:

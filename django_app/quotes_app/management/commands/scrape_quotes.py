@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 from django.core.management.base import BaseCommand, CommandError
-from quotes_app.models import Quote, Author, Category, Tag
+from quotes_app.models import Quote, Author, Category, Source
 from django.utils import timezone
 import html
 import traceback
@@ -43,10 +43,10 @@ def clean_text_for_db(text):
     # Split de tekst op alle newlines, strip elke individuele regel,
     # filter lege regels eruit, en voeg ze dan weer samen met één newline.
     lines = filtered_text.split('\n')
-    stripped_non_empty_lines = [line.strip() for line in lines if line.strip()] # Strip en filter lege lijnen
+    stripped_lines = [line.strip() for line in lines] # Strip en filter lege lijnen
     
     # Voeg de opgeschoonde lijnen weer samen met een enkele newline
-    final_text = '\n'.join(stripped_non_empty_lines)
+    final_text = '\n'.join(stripped_lines)
 
     return final_text.strip() # Final strip voor witruimte aan begin/einde van de hele quote
 
@@ -66,7 +66,7 @@ class Command(BaseCommand):
             self.stdout.write(f'Fetching URL: {start_url}')
             response = requests.get(start_url)
             response.raise_for_status()
-            response.encoding = 'utf-8' # <-- BELANGRIJK: Forceer de decodering naar UTF-8
+            response.encoding = response.apparent_encoding
             soup = BeautifulSoup(response.text, 'html.parser')
 
             # De quotes bevinden zich in de tweede <td> van de hoofdtabel (width="700")
@@ -168,38 +168,34 @@ class Command(BaseCommand):
             source_name = clean_text_for_db(source_tag.get_text(strip=True))
         
         # --- Database opslag ---
+        
         if full_quote_text:
             try:
-                author_obj = None
-                if author_name:
-                    author_obj, created_author = Author.objects.get_or_create(name=author_name)
-                    if created_author:
-                        self.stdout.write(self.style.NOTICE(f'Created new author: {author_name}'))
+                # Maak de gerelateerde objecten aan of haal ze op
+                author_obj, _ = Author.objects.get_or_create(name=author_name) if author_name else (None, False)
+                # De hoofdcategorie is altijd "Quotes" in dit script
+                main_category_obj, _ = Category.objects.get_or_create(name="Quotes")
+                # De subcategorie (bv "Love and Dreams") wordt de Source
+                source_obj, _ = Source.objects.get_or_create(name=category_name)
 
-                category_obj, created_category = Category.objects.get_or_create(name=category_name)
-                if created_category:
-                    self.stdout.write(self.style.NOTICE(f'Created new category: {category_name}'))
-
+                # Maak de Quote aan en link naar de juiste objecten
                 quote_obj, created_quote = Quote.objects.get_or_create(
                     text=full_quote_text,
-                    author=author_obj,
-                    source=source_name,
-                    defaults={'added_date': timezone.now()}
+                    defaults={'author': author_obj, 'source': source_obj}
                 )
-                
-                if created_quote or not quote_obj.categories.filter(id=category_obj.id).exists():
-                    quote_obj.categories.add(category_obj)
-
+        
+                # Koppel de hoofdcategorie
+                if created_quote or not quote_obj.categories.filter(id=main_category_obj.id).exists():
+                    quote_obj.categories.add(main_category_obj)
 
                 if created_quote:
-                    self.stdout.write(self.style.SUCCESS(f'Successfully added quote: "{full_quote_text[:50]}..." by {author_name if author_name else "Unknown Author"} (Source: {source_name if source_name else "None"})'))
+                    self.stdout.write(self.style.SUCCESS(f'Successfully added quote: "{full_quote_text[:50]}..."'))
                 else:
-                     self.stdout.write(self.style.WARNING(f'Quote already exists (skipped): "{full_quote_text[:50]}..." by {author_name if author_name else "Unknown Author"}'))
-
+                    self.stdout.write(self.style.WARNING(f'Quote already exists (skipped): "{full_quote_text[:50]}..."'))
 
             except Exception as db_error:
                 traceback.print_exc()
-                self.stdout.write(self.style.ERROR(f'Error saving quote to DB: {db_error} - Quote: "{full_quote_text[:50]}..."'))
+                self.stdout.write(self.style.ERROR(f'Error saving quote to DB: {db_error}'))
         else:
             self.stdout.write(self.style.WARNING('Skipped empty quote text (or text extraction failed for block).'))
-        
+

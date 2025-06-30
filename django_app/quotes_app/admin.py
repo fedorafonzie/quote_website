@@ -1,10 +1,11 @@
-# QUOTE_WEBSITE/django_app/quotes_app/admin.py
+# django_app/quotes_app/admin.py
 
 from django.contrib import admin
-from .models import Author, Category, Tag, Quote # Importeer je modellen
+# Importeer ALLEEN de modellen die daadwerkelijk bestaan in models.py
+from .models import Category, Author, Source, Quote
 
-# Registreer je modellen hier
-admin.site.register(Author)
+# Registreer de modellen om ze zichtbaar te maken in de admin-interface
 admin.site.register(Category)
-admin.site.register(Tag)
+admin.site.register(Author)
+admin.site.register(Source)
 admin.site.register(Quote)
