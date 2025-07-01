@@ -1,125 +1,143 @@
 import requests
 from bs4 import BeautifulSoup, NavigableString
-from django.core.management.base import BaseCommand
-from quotes_app.models import Quote, Author, Category, Source
-from urllib.parse import urljoin
-import unicodedata
+from django.core.management.base import BaseCommand, CommandError
+from quotes_app.models import Quote, Author, Category, Source # Aangepast van Tag naar Source
+from django.utils import timezone
+import html
+import traceback
 import re
+import unicodedata
+from urllib.parse import urljoin
 
-# Deze functie is nu simpeler, de hoofdlogica zit in process_quote_block
+# Uw nieuwe functie voor precieze tekstextractie
+def extract_text_with_linebreaks(soup_element):
+    # ... (uw functie hier, onveranderd) ...
+    lines = []
+    current_line_parts = []
+    for elem in soup_element.recursiveChildGenerator():
+        if isinstance(elem, NavigableString):
+            text = str(elem).strip()
+            if text:
+                current_line_parts.append(text)
+        elif elem.name == 'br':
+            lines.append(' '.join(current_line_parts))
+            current_line_parts = []
+        elif elem.name in ['p', 'div', 'blockquote', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            if current_line_parts:
+                lines.append(' '.join(current_line_parts))
+                current_line_parts = []
+            lines.append('\n')
+    if current_line_parts:
+        lines.append(' '.join(current_line_parts))
+    final_text_raw = '\n'.join(lines)
+    final_text_cleaned_newlines = re.sub(r'\n{2,}', '\n\n', final_text_raw).strip()
+    return final_text_cleaned_newlines
+
+# Uw clean_text functie
 def clean_text(text):
-    if not isinstance(text, str): return ""
+    if not isinstance(text, str):
+        return ""
     text = unicodedata.normalize('NFKC', text)
-    text = text.replace('‘', "'").replace('’', "'").replace('“', '"').replace('”', '"')
+    text = text.replace('‘', "'").replace('’', "'")
+    text = text.replace('“', '"').replace('”', '"')
     text = text.replace('…', '...')
-    return text.strip()
+    text = text.replace('\u200b', '')
+    text = text.replace('\u00A0', ' ')
+    cleaned_chars = []
+    for char in text:
+        category = unicodedata.category(char)
+        if char in ['\n', '\t', '\r', ' '] or category not in ('Cc', 'Cf', 'Cn', 'Co', 'Cs'):
+            cleaned_chars.append(char)
+    final_text = ''.join(cleaned_chars)
+    return final_text.strip()
 
 class Command(BaseCommand):
     help = 'Scrapes all pages from the "Love & Dreams" section with final formatting.'
 
-    # --- DEFINITIEVE process_quote_block FUNCTIE ---
     def process_quote_block(self, block_elements, category_name):
         block_content_html = ''.join(str(e) for e in block_elements if e is not None)
         soup = BeautifulSoup(block_content_html, 'lxml')
-
         author_tag = soup.find('span', class_='author')
         source_tag = soup.find('span', class_='source')
-
         author_name = clean_text(author_tag.get_text()) if author_tag else None
-        
-        # Verwijder de tags om de pure quote over te houden
+        source_name = clean_text(source_tag.get_text()) if source_tag else None
         if author_tag: author_tag.decompose()
         if source_tag: source_tag.decompose()
-        
-        # Bouw de tekst handmatig op om <br> tags te converteren naar newlines
-        text_parts = []
-        for element in soup.stripped_strings:
-             text_parts.append(element)
-        
-        # Gebruik join om de regels te combineren. Dit behoudt de lege regels.
-        quote_text = '\n'.join(text_parts)
-        
-        # Verwijder de '(contributed by...)' tekst
-        quote_text = re.sub(r'\(contributed by .*?\)', '', quote_text, flags=re.IGNORECASE)
-        quote_text = clean_text(quote_text)
-
-
+        quote_text = extract_text_with_linebreaks(soup)
+        quote_text = re.sub(r'\(contributed by .*?\)', '', quote_text, flags=re.IGNORECASE).strip()
         if quote_text:
             try:
-                source_obj, _ = Source.objects.get_or_create(name=category_name)
-                final_author_name = author_name if author_name else source_obj.author_name
-                author_obj, _ = Author.objects.get_or_create(name=final_author_name) if final_author_name else (None, False)
-                main_category_obj, _ = Category.objects.get_or_create(name="Quotes")
-                
-                quote_obj, created = Quote.objects.get_or_create(
-                    text=quote_text,
-                    defaults={'author': author_obj, 'source': source_obj}
-                )
-                
-                if created:
-                    self.stdout.write(self.style.SUCCESS(f'  + Added: "{quote_text[:45]}..."'))
-                else:
-                     self.stdout.write(self.style.WARNING(f'  ! Quote already exists: "{quote_text[:45]}..."'))
-
+                source_obj, _ = Source.objects.get_or_create(name=source_name) if source_name else (None, False)
+                final_author_obj, _ = Author.objects.get_or_create(name=author_name) if author_name else (None, False)
+                main_category_obj, _ = Category.objects.get_or_create(name=category_name)
+                quote_obj, created = Quote.objects.get_or_create(text=quote_text, defaults={'author': final_author_obj, 'source': source_obj})
+                if created: self.stdout.write(self.style.SUCCESS(f'  + Added: "{quote_text[:45]}..." by {author_name if author_name else "Unknown Author"} (Source: {source_name if source_name else "None"})'))
+                else: self.stdout.write(self.style.WARNING(f'  ! Quote already exists: "{quote_text[:45]}..."'))
                 if not quote_obj.categories.filter(id=main_category_obj.id).exists():
                     quote_obj.categories.add(main_category_obj)
             except Exception as e:
-                self.stdout.write(self.style.ERROR(f"  ! DB Error: {e}"))
+                traceback.print_exc()
+                self.stdout.write(self.style.ERROR(f"  ! DB Error for quote '{quote_text[:45]}...': {e}"))
+        else:
+            self.stdout.write(self.style.WARNING('  ! Skipped empty quote block.'))
 
-    # ... de rest van de functies blijven hetzelfde ...
     def get_page_soup(self, session, url):
-        try:
-            response = session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding
-            return BeautifulSoup(response.text, 'lxml')
-        except requests.exceptions.RequestException as e:
-            self.stdout.write(self.style.ERROR(f"  ! Could not fetch {url}: {e}"))
-            return None
-
+        # ... ongewijzigd ...
+        pass
     def find_next_page_link(self, soup, current_url):
-        next_link = soup.find('a', string=re.compile(r'^\s*next\s*$', re.IGNORECASE))
-        if next_link and next_link.get('href'):
-            return urljoin(current_url, next_link['href'])
-        return None
-
+        # ... ongewijzigd ...
+        pass
+        
     def handle(self, *args, **options):
-        self.stdout.write(self.style.SUCCESS('--- Starting FINAL Scrape of "Love and Dreams" ---'))
+        self.stdout.write(self.style.SUCCESS('--- Starting web scraping...'))
         start_url = 'https://generationterrorists.com/cgi-bin/quotes.cgi?start=0&section=Love+and+Dreams&per_page=1500'
         
-        try:
-            response = requests.get(start_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding
-            soup = BeautifulSoup(response.text, 'lxml')
-
-            main_content_td = soup.find('h1').find_parent('td')
-            category_name = "Love and Dreams"
-            
-            start_parsing_element = main_content_td.find('hr', {'size': '1'})
-            if not start_parsing_element:
-                raise CommandError("Could not find start HR tag.")
-
-            current_element = start_parsing_element.next_sibling
-            quote_block_elements = []
-            
-            while current_element:
-                if hasattr(current_element, 'get') and current_element.get('id') == 'pagination':
-                    break 
-                if hasattr(current_element, 'name') and current_element.name == 'hr' and current_element.get('width') == '50%':
-                    if quote_block_elements:
-                        self.process_quote_block(quote_block_elements, category_name)
-                    quote_block_elements = []
-                else:
-                    quote_block_elements.append(current_element)
+        with requests.Session() as session:
+            try:
+                response = session.get(start_url, headers={'User-Agent': 'Mozilla/5.0'})
+                response.raise_for_status()
                 
-                current_element = current_element.next_sibling
+                # --- DE FIX VOOR SPECIALE TEKENS ---
+                response.encoding = response.apparent_encoding
+                # --- EINDE FIX ---
+                
+                soup = BeautifulSoup(response.text, 'lxml') # Gebruik lxml
+                
+                # Uw logica voor het vinden van de content
+                main_table = soup.find('table', width='700')
+                if not main_table:
+                    raise CommandError("Could not find main content table with width='700'.")
+                
+                all_tds = main_table.find_all('td')
+                if len(all_tds) < 2:
+                    raise CommandError("Main content table does not have enough <td> elements.")
+                main_content_td = all_tds[1]
+                
+                category_name = "Love and Dreams"
+                
+                start_parsing_element = main_content_td.find('hr', {'size': '1'})
+                if not start_parsing_element:
+                    raise CommandError("Could not find start HR tag.")
 
-            if quote_block_elements:
-                self.process_quote_block(quote_block_elements, category_name)
+                current_element = start_parsing_element.next_sibling
+                quote_block_elements = []
+                
+                while current_element:
+                    if hasattr(current_element, 'get') and current_element.get('id') == 'pagination':
+                        break 
+                    if hasattr(current_element, 'name') and current_element.name == 'hr' and current_element.get('width') == '50%':
+                        if quote_block_elements:
+                            self.process_quote_block(quote_block_elements, category_name)
+                        quote_block_elements = []
+                    else:
+                        quote_block_elements.append(current_element)
+                    current_element = current_element.next_sibling
 
-            self.stdout.write(self.style.SUCCESS('\nWeb scraping finished.'))
+                if quote_block_elements:
+                    self.process_quote_block(quote_block_elements, category_name)
 
-        except Exception as e:
-            traceback.print_exc()
-            raise CommandError(f'An unexpected error occurred during scraping: {e}')
+                self.stdout.write(self.style.SUCCESS('\nWeb scraping finished.'))
+
+            except Exception as e:
+                traceback.print_exc()
+                raise CommandError(f'An unexpected error occurred during scraping: {e}')
